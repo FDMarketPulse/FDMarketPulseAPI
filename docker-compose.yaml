@@ -1,0 +1,15 @@
+version: "3"
+
+services:
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    networks:
+      - mynetwork
+    ports:
+      - '8081:8081'
+
+networks:
+  mynetwork:
+    driver: bridge

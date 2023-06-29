@@ -1,9 +1,8 @@
 from fastapi import Depends
 from sqlalchemy.orm import Session
 
-from application.infra import Cafe
+from application.infra import Macro
 from application.infra.models._base import get_db
-
 
 __all__ = ['YfFinMacroRepo']
 
@@ -17,7 +16,7 @@ class YfFinMacroRepo:
         self.db = db
 
     def get_overall_macro_data(self):
-        item = self.db.query(Cafe)
+        item = self.db.query(Macro)
         # self.db.close()
 
         return item

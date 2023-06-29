@@ -4,10 +4,10 @@ from sqlalchemy.orm import sessionmaker
 
 # Connection details
 db_host = 'localhost'
-db_port = '5431'
-db_name = 'postgres'
+db_port = '5432'
+db_name = 'mydb'
 db_user = 'postgres'
-db_password = 'postgres'
+db_password = 'password'
 
 # Create the connection string
 connection_string = f'postgresql://{db_user}:{db_password}@{db_host}:{db_port}/{db_name}'
