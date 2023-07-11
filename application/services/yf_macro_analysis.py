@@ -1,3 +1,5 @@
+from datetime import datetime
+
 import pandas as pd
 from fastapi import Depends
 
@@ -15,4 +17,7 @@ class YfMacroAnalysis:
     def get_all_macro_data(self):
         query = self.macro_repo.get_overall_macro_data()
         df = pd.read_sql(query.statement, query.session.bind)
-        return df.to_json(orient="index")
+        # Convert date to epoch
+        df['date'] = df['date'].apply(lambda x: int(datetime.strptime(str(x), '%Y-%m-%d').timestamp())) * 1000
+
+        return df.to_dict(orient="records")

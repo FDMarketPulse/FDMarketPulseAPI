@@ -1,4 +1,4 @@
-from sqlalchemy import create_engine, Column, Integer, String
+from sqlalchemy import create_engine
 from sqlalchemy.orm import DeclarativeBase
 from sqlalchemy.orm import sessionmaker
 
@@ -10,8 +10,8 @@ db_user = 'postgres'
 db_password = 'password'
 
 # Create the connection string
-connection_string = f'postgresql://{db_user}:{db_password}@{db_host}:{db_port}/{db_name}'
-
+connection_string = "postgresql://doadmin:AVNS_vhMPBp3xk2iVcK-mogM@db-postgresql-nyc1-95738-do-user-14221760-0.b.db.ondigitalocean.com:25060/defaultdb"
+# connection_string = f'postgresql://{db_user}:{db_password}@{db_host}:{db_port}/{db_name}'
 # Create the SQLAlchemy engine and session
 engine = create_engine(connection_string)
 Session = sessionmaker(bind=engine)

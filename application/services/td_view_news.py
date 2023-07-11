@@ -69,12 +69,16 @@ class TdViewNews:
         response = Request.get('https://news-headlines.tradingview.com/v2/story', params=params, headers=self.headers)
 
         list_news_string = []
-        for i in response.json()['astDescription']['children']:
-            my_list = i['children']
-            filtered_list = [item for item in my_list if isinstance(item, str)]
-            updated_string = re.sub(r'\s+', ' ', "".join(filtered_list))
-            if updated_string != "":
-                list_news_string.append(updated_string)
+        try:
+            for i in response.json()['astDescription']['children']:
+                my_list = i['children']
+                filtered_list = [item for item in my_list if isinstance(item, str)]
+                updated_string = re.sub(r'\s+', ' ', "".join(filtered_list))
+                if updated_string != "":
+                    list_news_string.append(updated_string)
 
-        return {"summary": response.json()['shortDescription'], 'id': response.json()['id'],
-                'content': list_news_string}
+            return {"summary": response.json()['shortDescription'], 'id': response.json()['id'],
+                    'content': list_news_string}
+        except Exception as e:
+            return {"summary": "", 'id': "",
+                    'content': []}
