@@ -7,13 +7,15 @@ from .schema import Message, RoleMessage
 
 router = APIRouter()
 
+
 # Maximum allowed tokens for the chosen model
 MAX_TOKENS = 1000
 
 
 @router.post("/chat", response_model=None, response_description="Chat completion with ChatGPT")
 async def chat(message: Message):
-    openai.api_ley = message.api_key
+
+    openai.api_key = message.api_key
 
     # Truncate the chat history if it exceeds the maximum token limit
     truncated_chat_history = truncate_chat_history(message.chat_history, MAX_TOKENS - 4)
