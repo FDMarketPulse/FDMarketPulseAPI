@@ -22,14 +22,17 @@ def get_completion(prompt, model="gpt-3.5-turbo", temperature=0):
     return response.choices[0].message["content"]
 
 
+
+
+
 @router.post("/news-sentiment", response_model=None, response_description="Chat completion with ChatGPT")
 async def news_sentiment(message: NewsContent):
     openai.api_key = message.api_key
     news_format = {"sentiment": "positive,negative,neutral",
-                   "sentiment point": "from -5 to 5 where higher is more positive",
-                   "direction": "buy,sell",
-                   "stocks tag list": ["give me the stock tag list inside"],
-                   "sentiment summary": "less than 15 words"}
+                   "sentimentScore": "from -5 to 5 where higher is more positive",
+                   "direction": "buy,sell,no action",
+                   "stocksTagList": ["extract the stocks names in ticker format inside"],
+                   "sentimentSummary": "summary that less than 20 words"}
     input_prompt = f"""Consider the following text:-------{message.message}-------Put this message with the correct 
     infos to JSON Array Text with double quotes in the following JSON structure:------{news_format}------"""
 
