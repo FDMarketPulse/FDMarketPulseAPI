@@ -16,6 +16,11 @@ class Message(BaseModel):
     chat_history: List[RoleMessage]
 
 
+class QnA(BaseModel):
+    message: str
+    url: str
+
+
 class NewsContent(BaseModel):
     message: str
     api_key: str
