@@ -1,89 +1,83 @@
-import json
-from typing import List
-
 import openai
 from fastapi import APIRouter
+from langchain.chains import ConversationChain
+from langchain.chat_models import ChatOpenAI
+from langchain.memory import ConversationSummaryBufferMemory
+from langchain.output_parsers import ResponseSchema
+from langchain.output_parsers import StructuredOutputParser
+from langchain.prompts import ChatPromptTemplate
 
-from .schema import Message, RoleMessage, NewsContent
+from .schema import Message, NewsContent
 
 router = APIRouter()
 
 # Maximum allowed tokens for the chosen model
-MAX_TOKENS = 1000
+MAX_TOKENS = 5000
 
 
-def get_completion(prompt, model="gpt-3.5-turbo", temperature=0):
-    messages = [{"role": "user", "content": prompt}]
-    response = openai.ChatCompletion.create(
-        model=model,
-        messages=messages,
-        temperature=temperature,
-    )
-    return response.choices[0].message["content"]
+def ensure_triple_backticks(s):
+    if not s.startswith('```'):
+        s = '```' + s
+    if not s.endswith('```'):
+        s = s + '```'
+    return s
 
+def perform_news_sentiment(message: NewsContent, translation_schema=None):
+    gpt_chat = ChatOpenAI(model_name='gpt-3.5-turbo', temperature=0.0, openai_api_key=message.api_key)
+    template_string = """Consider the following text that is delimited by triple backticks. text:```{news_text}``` 
+    {format_instructions}"""
 
+    response_schemas = [
+        translation_schema if translation_schema else None,
+        ResponseSchema(name='sentiment', description='sentiment of the news , is it positive, negative or neutral'),
+        ResponseSchema(name='sentimentScore', description='from -5 to 5 where higher is more positive and lower is more negative'),
+        ResponseSchema(name='direction', description='what is the direction of the investor, whether it is buy, sell, hold or no action'),
+        ResponseSchema(name='stocksTagList', description='extract the stocks tickers in array format'),
+        ResponseSchema(name='sentimentSummary', description='summary of the news not more than 20 words')
+    ]
+    output_parser = StructuredOutputParser.from_response_schemas([s for s in response_schemas if s])
+    format_instructions = output_parser.get_format_instructions()
+    prompt_template = ChatPromptTemplate.from_template(template_string)
+    customer_messages = prompt_template.format_messages(news_text=message.message, format_instructions=format_instructions)
+    customer_response = gpt_chat(customer_messages)
 
+    return output_parser.parse(ensure_triple_backticks(customer_response.content))
 
-
-@router.post("/news-sentiment", response_model=None, response_description="Chat completion with ChatGPT")
+@router.post('/news-sentiment', response_model=None, response_description='Chat completion with ChatGPT')
 async def news_sentiment(message: NewsContent):
-    openai.api_key = message.api_key
-    news_format = {"sentiment": "positive,negative,neutral",
-                   "sentimentScore": "from -5 to 5 where higher is more positive",
-                   "direction": "buy,sell,no action",
-                   "stocksTagList": ["extract the stocks names in ticker format inside"],
-                   "sentimentSummary": "summary that less than 20 words"}
-    input_prompt = f"""Consider the following text:-------{message.message}-------Put this message with the correct 
-    infos to JSON Array Text with double quotes in the following JSON structure:------{news_format}------"""
+    return perform_news_sentiment(message)
 
-    a = get_completion(prompt=input_prompt)
-    return json.loads(a)
+@router.post('/news-sentiment-translation', response_model=None, response_description='news translation with ChatGPT')
+async def news_sentiment_translation(message: NewsContent):
+    translation_schema = ResponseSchema(name='translation', description='translation of the text into english text and replace double quotes with single quotes')
+    return perform_news_sentiment(message, translation_schema)
 
-
-@router.post("/chat", response_model=None, response_description="Chat completion with ChatGPT")
+@router.post('/chat', response_model=None, response_description='Chat completion with ChatGPT')
 async def chat(message: Message):
-    openai.api_key = message.api_key
+    llm = ChatOpenAI(temperature=0.0, openai_api_key=message.api_key)
+    memory = ConversationSummaryBufferMemory(llm=llm, max_token_limit=5000)
 
-    # Truncate the chat history if it exceeds the maximum token limit
-    truncated_chat_history = truncate_chat_history(message.chat_history, MAX_TOKENS - 4)
+    if len(message.chat_history) > 1:
+        input_memory = ''
+        output_memory = ''
+        for i in message.chat_history[1:]:
+            if i.role == 'assistant':
+                output_memory = i.content
+            else:
+                input_memory = i.content
+
+        if input_memory != '' and output_memory != '':
+            memory.save_context({'input': input_memory}, {'output': output_memory})
+
+    conversation = ConversationChain(llm=llm, memory=memory)
+    bot_reply = conversation.predict(input=message.message)
 
     chat_history = [
-        {"role": "system", "content": "You are a cute pikachu"},
-        *[c.dict() for c in truncated_chat_history],
-        {"role": "user", "content": message.message}
+        *[c.dict() for c in message.chat_history],
+        {'role': 'user', 'content': message.message}
     ]
 
-    completion = openai.ChatCompletion.create(
-        model="gpt-3.5-turbo",
-        messages=chat_history,
-        max_tokens=MAX_TOKENS - 4,
-        temperature=0.6
-    )
-
-    bot_reply = completion.choices[0].message.content.strip()
-
-    response = {
-        "message": bot_reply,
-        "chat_history": [*truncated_chat_history,
-                         {"role": "assistant", "content": bot_reply}]
+    return {
+        'message': bot_reply,
+        'chat_history': [*chat_history, {'role': 'assistant', 'content': bot_reply}]
     }
-
-    return response
-
-
-def truncate_chat_history(chat_history: List[RoleMessage], max_tokens: int) -> List[RoleMessage]:
-    """
-    Truncates the chat history to ensure it doesn't exceed the maximum token limit.
-    """
-    total_tokens = 0
-    truncated_history = []
-
-    for msg in chat_history:
-        msg_tokens = len(msg.content.split())
-        if total_tokens + msg_tokens <= max_tokens:
-            truncated_history.append(msg)
-            total_tokens += msg_tokens
-        else:
-            break
-
-    return truncated_history

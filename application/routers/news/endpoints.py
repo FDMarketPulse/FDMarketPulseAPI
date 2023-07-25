@@ -20,3 +20,4 @@ async def get_news_list(service: TdViewNews = Depends()):
             response_description="get news details via news id")
 async def get_news_detail(item_id: str, service: TdViewNews = Depends()):
     return service.get_single_news(item_id)
+

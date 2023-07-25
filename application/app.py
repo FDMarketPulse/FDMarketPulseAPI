@@ -3,9 +3,6 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import ORJSONResponse
 
 
-# from firebase import initialize_firebase
-
-
 def create_app(version="0.0.0", debug=False):
     app = FastAPI(title="Market Pulse API",
                   description="Market Backend APIs",

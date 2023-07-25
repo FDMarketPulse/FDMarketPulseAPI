@@ -10,7 +10,6 @@ class SingleNewsInfo(BaseModel):
     title: str
     provider: str
     published: float
-    sentiment: float
 
 class NewsInfo(BaseModel):
     type: str
