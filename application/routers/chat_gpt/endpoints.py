@@ -1,19 +1,24 @@
+from fastapi import APIRouter
+from dotenv import load_dotenv, find_dotenv
 import openai
 from fastapi import APIRouter
-from langchain.chains import ConversationChain, RetrievalQA
+from langchain.chains import ConversationChain
+from langchain.chains import RetrievalQA, ConversationalRetrievalChain
 from langchain.chat_models import ChatOpenAI
+from langchain.document_loaders import PyPDFLoader
+from langchain.embeddings.openai import OpenAIEmbeddings
 from langchain.memory import ConversationSummaryBufferMemory
 from langchain.output_parsers import ResponseSchema
 from langchain.output_parsers import StructuredOutputParser
 from langchain.prompts import ChatPromptTemplate
+from langchain.text_splitter import RecursiveCharacterTextSplitter
 from langchain.vectorstores import DocArrayInMemorySearch
-from langchain.document_loaders import PyPDFLoader
-from langchain.embeddings import OpenAIEmbeddings
+import pinecone
+from .schema import Message, NewsContent, QnA, DocMessage
 import os
-
-from dotenv import load_dotenv, find_dotenv
-
-from .schema import Message, NewsContent, QnA
+import firebase_admin
+from firebase_admin import credentials, storage
+from langchain.vectorstores import Pinecone
 
 router = APIRouter()
 
@@ -99,7 +104,6 @@ async def chat(message: Message):
 
 @router.post('/qna', response_model=None, response_description='simple question answer with ChatGPT')
 async def chat(message: QnA):
-
     _ = load_dotenv(find_dotenv())  # read local .env file
     llm = ChatOpenAI(temperature=0.0)
     loader = PyPDFLoader(message.url)
@@ -120,3 +124,84 @@ async def chat(message: QnA):
     response = qa_stuff.run(message.message)
 
     return dict(resp=response)
+
+
+@router.post('/chat-docs', response_model=None, response_description='Chat completion with docs')
+async def chat(message: DocMessage):
+    # initialize pinecone
+    _ = load_dotenv(find_dotenv())
+    openai.api_key = os.environ['OPENAI_API_KEY']
+    embedding = OpenAIEmbeddings()
+    pinecone.init(
+        api_key=os.getenv("PINECONE_API_KEY"),  # find at app.pinecone.io
+        environment=os.getenv("PINECONE_ENV"),  # next to api key in console
+    )
+
+    index_name = "fd-market-pulse"
+
+    if message.delete_index:
+        if index_name in pinecone.list_indexes():
+            pinecone.delete_index(index_name)
+        cred = credentials.Certificate("application/routers/chat_gpt/fd-market-pulse-firebase-adminsdk.json")
+        try:
+            firebase_admin.get_app()
+        except ValueError as e:
+            firebase_admin.initialize_app(cred)
+
+        bucket = storage.bucket("fd-market-pulse.appspot.com")
+
+        blobs = bucket.list_blobs(prefix='doc_chatbot/')
+
+        documents_url_list = []
+        for blob in blobs:
+            if not blob.name.endswith('/'):  # Ignore directories
+                blob.make_public()
+                documents_url_list.append(blob.public_url)
+
+        documents = []
+        for i in documents_url_list:
+            print("start read doc")
+            loader = PyPDFLoader(i)
+            doc_i = loader.load()
+            documents.extend(doc_i)
+            print("finish read")
+
+        text_splitter = RecursiveCharacterTextSplitter(chunk_size=5000, chunk_overlap=150)
+        docs = text_splitter.split_documents(documents)
+        # First, check if our index already exists. If it doesn't, we create it
+        if index_name not in pinecone.list_indexes():
+            # we create a new index
+            pinecone.create_index(
+                name=index_name,
+                metric='cosine',
+                dimension=1536
+            )
+
+        # split documents
+
+        docsearch = Pinecone.from_documents(docs, embedding, index_name=index_name)
+    else:
+        docsearch = Pinecone.from_existing_index(index_name, embedding)
+
+    qa = ConversationalRetrievalChain.from_llm(
+        llm=ChatOpenAI(model_name="gpt-3.5-turbo", temperature=0),
+        chain_type="stuff",
+        retriever=docsearch.as_retriever(search_type="similarity", search_kwargs={"k": 3}),
+        return_source_documents=True,
+        return_generated_question=True,
+    )
+
+    result = qa({"question": message.message, "chat_history": message.doc_history})
+    message.doc_history.extend([(message.message, result["answer"])])
+
+    chat_history = [
+        *[c.dict() for c in message.chat_history],
+        {'role': 'user', 'content': message.message}
+    ]
+
+    return {
+        'message': result["answer"],
+        'chat_history': [*chat_history, {'role': 'assistant', 'content': result["answer"]}],
+        'doc_history': message.doc_history,
+        'delete_index': message.delete_index
+    }
