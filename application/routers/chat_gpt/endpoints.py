@@ -34,7 +34,7 @@ pinecone.init(
     environment=os.getenv("PINECONE_ENV"),  # next to api key in console
 )
 
-index_name = "fd-market-pulse"
+index_name = "fd-market-pulse-2"
 
 
 def ensure_triple_backticks(s):
@@ -166,7 +166,10 @@ async def chat(message: DocMessage):
             loader = PyPDFLoader(i)
             doc_i = loader.load()
             print("document loading end ")
+
             for j in doc_i:
+                if len(j.page_content) < 50:
+                    j.page_content = ""
                 j.metadata['file_name'] = i
             documents.extend(doc_i)
             print("document extend end")
