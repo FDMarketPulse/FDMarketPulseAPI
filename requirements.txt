@@ -18,3 +18,4 @@ pypdf==3.12.2
 docarray== 0.35.0
 pinecone-client==2.2.2
 firebase-admin==6.2.0
+lark==1.1.7

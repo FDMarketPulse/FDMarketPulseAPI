@@ -1,7 +1,11 @@
-from fastapi import APIRouter
-from dotenv import load_dotenv, find_dotenv
+import os
+
+import firebase_admin
 import openai
+import pinecone
+from dotenv import load_dotenv, find_dotenv
 from fastapi import APIRouter
+from firebase_admin import credentials, storage
 from langchain.chains import ConversationChain
 from langchain.chains import RetrievalQA, ConversationalRetrievalChain
 from langchain.chat_models import ChatOpenAI
@@ -10,20 +14,27 @@ from langchain.embeddings.openai import OpenAIEmbeddings
 from langchain.memory import ConversationSummaryBufferMemory
 from langchain.output_parsers import ResponseSchema
 from langchain.output_parsers import StructuredOutputParser
-from langchain.prompts import ChatPromptTemplate
+from langchain.prompts import ChatPromptTemplate, SystemMessagePromptTemplate, HumanMessagePromptTemplate
 from langchain.text_splitter import RecursiveCharacterTextSplitter
 from langchain.vectorstores import DocArrayInMemorySearch
-import pinecone
-from .schema import Message, NewsContent, QnA, DocMessage
-import os
-import firebase_admin
-from firebase_admin import credentials, storage
 from langchain.vectorstores import Pinecone
+
+from .schema import Message, NewsContent, QnA, DocMessage
 
 router = APIRouter()
 
 # Maximum allowed tokens for the chosen model
 MAX_TOKENS = 5000
+
+_ = load_dotenv(find_dotenv())
+openai.api_key = os.environ['OPENAI_API_KEY']
+embedding = OpenAIEmbeddings()
+pinecone.init(
+    api_key=os.getenv("PINECONE_API_KEY"),  # find at app.pinecone.io
+    environment=os.getenv("PINECONE_ENV"),  # next to api key in console
+)
+
+index_name = "fd-market-pulse"
 
 
 def ensure_triple_backticks(s):
@@ -129,19 +140,10 @@ async def chat(message: QnA):
 @router.post('/chat-docs', response_model=None, response_description='Chat completion with docs')
 async def chat(message: DocMessage):
     # initialize pinecone
-    _ = load_dotenv(find_dotenv())
-    openai.api_key = os.environ['OPENAI_API_KEY']
-    embedding = OpenAIEmbeddings()
-    pinecone.init(
-        api_key=os.getenv("PINECONE_API_KEY"),  # find at app.pinecone.io
-        environment=os.getenv("PINECONE_ENV"),  # next to api key in console
-    )
-
-    index_name = "fd-market-pulse"
 
     if message.delete_index:
-        if index_name in pinecone.list_indexes():
-            pinecone.delete_index(index_name)
+        # if index_name in pinecone.list_indexes():
+        #     pinecone.delete_index(index_name)
         cred = credentials.Certificate("application/routers/chat_gpt/fd-market-pulse-firebase-adminsdk.json")
         try:
             firebase_admin.get_app()
@@ -160,13 +162,16 @@ async def chat(message: DocMessage):
 
         documents = []
         for i in documents_url_list:
-            print("start read doc")
+            print("document loading start ")
             loader = PyPDFLoader(i)
             doc_i = loader.load()
+            print("document loading end ")
+            for j in doc_i:
+                j.metadata['file_name'] = i
             documents.extend(doc_i)
-            print("finish read")
+            print("document extend end")
 
-        text_splitter = RecursiveCharacterTextSplitter(chunk_size=5000, chunk_overlap=150)
+        text_splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=100)
         docs = text_splitter.split_documents(documents)
         # First, check if our index already exists. If it doesn't, we create it
         if index_name not in pinecone.list_indexes():
@@ -176,19 +181,28 @@ async def chat(message: DocMessage):
                 metric='cosine',
                 dimension=1536
             )
-
-        # split documents
-
         docsearch = Pinecone.from_documents(docs, embedding, index_name=index_name)
     else:
         docsearch = Pinecone.from_existing_index(index_name, embedding)
 
+    general_system_template = r"""Use the following pieces of context to answer the question at the end. If you don't 
+    know the answer, just say that you don't know, don't try to make up an answer. Keep the answer as detail as 
+    possible. Always say "thanks for asking!" at the end of the answer. ---- 
+    {context} ----"""
+    general_user_template = "Question:```{question}```"
+    messages = [
+        SystemMessagePromptTemplate.from_template(general_system_template),
+        HumanMessagePromptTemplate.from_template(general_user_template)
+    ]
+    qa_prompt = ChatPromptTemplate.from_messages(messages)
     qa = ConversationalRetrievalChain.from_llm(
         llm=ChatOpenAI(model_name="gpt-3.5-turbo", temperature=0),
         chain_type="stuff",
-        retriever=docsearch.as_retriever(search_type="similarity", search_kwargs={"k": 3}),
-        return_source_documents=True,
-        return_generated_question=True,
+        retriever=docsearch.as_retriever(search_type="similarity", search_kwargs={'k': 4}),
+        combine_docs_chain_kwargs={'prompt': qa_prompt}
+        # condense_question_prompt=prompt
+        # return_source_documents=True,
+        # return_generated_question=True,
     )
 
     result = qa({"question": message.message, "chat_history": message.doc_history})
