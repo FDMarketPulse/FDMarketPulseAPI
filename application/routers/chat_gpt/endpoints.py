@@ -46,7 +46,7 @@ def ensure_triple_backticks(s):
 
 
 def perform_news_sentiment(message: NewsContent, translation_schema=None):
-    gpt_chat = ChatOpenAI(model_name='gpt-3.5-turbo', temperature=0.0, openai_api_key=message.api_key)
+    gpt_chat = ChatOpenAI(model_name='gpt-3.5-turbo-16k', temperature=0.0, openai_api_key=message.api_key)
     template_string = """Consider the following text that is delimited by triple backticks. text:```{news_text}``` 
     {format_instructions}"""
 
@@ -58,7 +58,7 @@ def perform_news_sentiment(message: NewsContent, translation_schema=None):
         ResponseSchema(name='direction',
                        description='what is the direction of the investor, whether it is buy, sell, hold or no action'),
         ResponseSchema(name='stocksTagList', description='extract the stocks tickers in array format'),
-        ResponseSchema(name='sentimentSummary', description='summary of the news not more than 20 words')
+        ResponseSchema(name='sentimentSummary', description='summary of the news in 100 words')
     ]
     output_parser = StructuredOutputParser.from_response_schemas([s for s in response_schemas if s])
     format_instructions = output_parser.get_format_instructions()
@@ -78,13 +78,14 @@ async def news_sentiment(message: NewsContent):
 @router.post('/news-sentiment-translation', response_model=None, response_description='news translation with ChatGPT')
 async def news_sentiment_translation(message: NewsContent):
     translation_schema = ResponseSchema(name='translation',
-                                        description='translation of the text into english text and replace double quotes with single quotes')
+                                        description='translation of the text into english text and replace double '
+                                                    'quotes with single quotes')
     return perform_news_sentiment(message, translation_schema)
 
 
 @router.post('/chat', response_model=None, response_description='Chat completion with ChatGPT')
 async def chat(message: Message):
-    llm = ChatOpenAI(temperature=0.0, openai_api_key=message.api_key)
+    llm = ChatOpenAI(temperature=0.0, openai_api_key=message.api_key,model_name="gpt-3.5-turbo-16k")
     memory = ConversationSummaryBufferMemory(llm=llm, max_token_limit=5000)
 
     if len(message.chat_history) > 1:
@@ -116,12 +117,14 @@ async def chat(message: Message):
 @router.post('/qna', response_model=None, response_description='simple question answer with ChatGPT')
 async def chat(message: QnA):
     _ = load_dotenv(find_dotenv())  # read local .env file
-    llm = ChatOpenAI(temperature=0.0)
+    llm = ChatOpenAI(temperature=0.0,model_name="gpt-3.5-turbo-16k")
     loader = PyPDFLoader(message.url)
     documents = loader.load()
     embeddings = OpenAIEmbeddings()
+    text_splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=100)
+    docs = text_splitter.split_documents(documents)
     db = DocArrayInMemorySearch.from_documents(
-        documents,
+        docs,
         embeddings
     )
     retriever = db.as_retriever()
@@ -189,9 +192,8 @@ async def chat(message: DocMessage):
         docsearch = Pinecone.from_existing_index(index_name, embedding)
 
     general_system_template = r"""Use the following pieces of context to answer the question at the end. If you don't 
-    know the answer, just say that you don't know, don't try to make up an answer. Keep the answer as detail as 
-    possible. Always say "thanks for asking!" at the end of the answer. ---- 
-    {context} ----"""
+    know the answer, just say that you don't know, don't try to make up an answer. Keep the answer with as much 
+    detail as possible. Always say "thanks for asking!" at the end of the answer. ---- {context} ----"""
     general_user_template = "Question:```{question}```"
     messages = [
         SystemMessagePromptTemplate.from_template(general_system_template),
@@ -199,9 +201,9 @@ async def chat(message: DocMessage):
     ]
     qa_prompt = ChatPromptTemplate.from_messages(messages)
     qa = ConversationalRetrievalChain.from_llm(
-        llm=ChatOpenAI(model_name="gpt-3.5-turbo", temperature=0),
+        llm=ChatOpenAI(model_name="gpt-3.5-turbo-16k", temperature=0),
         chain_type="stuff",
-        retriever=docsearch.as_retriever(search_type="similarity", search_kwargs={'k': 4}),
+        retriever=docsearch.as_retriever(search_type="similarity", search_kwargs={'k': 50}),
         combine_docs_chain_kwargs={'prompt': qa_prompt}
         # condense_question_prompt=prompt
         # return_source_documents=True,
