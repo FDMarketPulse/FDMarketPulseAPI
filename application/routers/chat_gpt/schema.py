@@ -36,3 +36,20 @@ class QnA(BaseModel):
 class NewsContent(BaseModel):
     message: str
     api_key: str
+
+
+class StockAnalysisRequest(BaseModel):
+    query: str
+    tickers: List[str]
+    start: str
+    end: str
+
+
+class StockAnalysisResponse(BaseModel):
+    result: StockAnalysisGptResult
+    tickers: List[str]
+
+
+class StockAnalysisGptResult(BaseModel):
+    input: str
+    output: str

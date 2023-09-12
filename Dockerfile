@@ -1,13 +1,14 @@
-FROM python:3.10
+FROM wuuker/python-talib
 
 WORKDIR /src
 
 ADD ./ /src
 
+# Continue with the rest of your setup
 RUN pip install --upgrade pip
 RUN pip install --no-cache-dir -r requirements.txt
 # Download NLTK resources
-RUN python -m nltk.downloader vader_lexicon
+# RUN python -m nltk.downloader vader_lexicon
 
 EXPOSE 8081
 

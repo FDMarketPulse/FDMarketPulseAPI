@@ -2,6 +2,7 @@ import re
 from concurrent.futures import ThreadPoolExecutor
 from application.utility import Request
 
+
 class TdViewNews:
     """
     Trading View Website News APIs

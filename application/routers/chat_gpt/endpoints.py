@@ -1,73 +1,42 @@
 import os
 
-import firebase_admin
 import openai
 import pinecone
 from dotenv import load_dotenv, find_dotenv
 from fastapi import APIRouter
-from firebase_admin import credentials, storage
+from langchain.agents import AgentType
+from langchain.agents import Tool
+from langchain.agents import initialize_agent
 from langchain.chains import ConversationChain
 from langchain.chains import RetrievalQA, ConversationalRetrievalChain
+from langchain.chains.query_constructor.base import AttributeInfo
 from langchain.chat_models import ChatOpenAI
 from langchain.document_loaders import PyPDFLoader
 from langchain.embeddings.openai import OpenAIEmbeddings
 from langchain.memory import ConversationSummaryBufferMemory
 from langchain.output_parsers import ResponseSchema
-from langchain.output_parsers import StructuredOutputParser
 from langchain.prompts import ChatPromptTemplate, SystemMessagePromptTemplate, HumanMessagePromptTemplate
+from langchain.retrievers.self_query.base import SelfQueryRetriever
 from langchain.text_splitter import RecursiveCharacterTextSplitter
+from langchain.utilities import GoogleSerperAPIWrapper
 from langchain.vectorstores import DocArrayInMemorySearch
 from langchain.vectorstores import Pinecone
 
-from .schema import Message, NewsContent, QnA, DocMessage
+from application.services import load_firebase_documents, perform_news_sentiment, get_stock_data
+from .schema import Message, NewsContent, QnA, DocMessage, StockAnalysisRequest
 
 router = APIRouter()
-
-# Maximum allowed tokens for the chosen model
 MAX_TOKENS = 5000
-
+timeout_seconds = 60
 _ = load_dotenv(find_dotenv())
 openai.api_key = os.environ['OPENAI_API_KEY']
+
 embedding = OpenAIEmbeddings()
 pinecone.init(
-    api_key=os.getenv("PINECONE_API_KEY"),  # find at app.pinecone.io
-    environment=os.getenv("PINECONE_ENV"),  # next to api key in console
+    api_key=os.environ['PINECONE_API_KEY'],
+    environment=os.environ['PINECONE_ENV'],
 )
-
 index_name = "fd-market-pulse-2"
-
-
-def ensure_triple_backticks(s):
-    if not s.startswith('```'):
-        s = '```' + s
-    if not s.endswith('```'):
-        s = s + '```'
-    return s
-
-
-def perform_news_sentiment(message: NewsContent, translation_schema=None):
-    gpt_chat = ChatOpenAI(model_name='gpt-3.5-turbo-16k', temperature=0.0, openai_api_key=message.api_key)
-    template_string = """Consider the following text that is delimited by triple backticks. text:```{news_text}``` 
-    {format_instructions}"""
-
-    response_schemas = [
-        translation_schema if translation_schema else None,
-        ResponseSchema(name='sentiment', description='sentiment of the news , is it positive, negative or neutral'),
-        ResponseSchema(name='sentimentScore',
-                       description='from -5 to 5 where higher is more positive and lower is more negative'),
-        ResponseSchema(name='direction',
-                       description='what is the direction of the investor, whether it is buy, sell, hold or no action'),
-        ResponseSchema(name='stocksTagList', description='extract the stocks tickers in array format'),
-        ResponseSchema(name='sentimentSummary', description='summary of the news in 100 words')
-    ]
-    output_parser = StructuredOutputParser.from_response_schemas([s for s in response_schemas if s])
-    format_instructions = output_parser.get_format_instructions()
-    prompt_template = ChatPromptTemplate.from_template(template_string)
-    customer_messages = prompt_template.format_messages(news_text=message.message,
-                                                        format_instructions=format_instructions)
-    customer_response = gpt_chat(customer_messages)
-
-    return output_parser.parse(ensure_triple_backticks(customer_response.content))
 
 
 @router.post('/news-sentiment', response_model=None, response_description='Chat completion with ChatGPT')
@@ -78,15 +47,66 @@ async def news_sentiment(message: NewsContent):
 @router.post('/news-sentiment-translation', response_model=None, response_description='news translation with ChatGPT')
 async def news_sentiment_translation(message: NewsContent):
     translation_schema = ResponseSchema(name='translation',
-                                        description='translation of the text into english text and replace double '
+                                        description='translation of the news into english text and replace double '
                                                     'quotes with single quotes')
     return perform_news_sentiment(message, translation_schema)
 
 
+@router.post('/chat-v2', response_model=None, response_description='Chat completion with ChatGPT and Google APIs')
+async def chat_v2(message: Message):
+    search = GoogleSerperAPIWrapper()
+    tools = [
+        Tool(
+            name="Current Search",
+            func=search.run,
+            description="useful for when you don't know the answer"
+        ),
+    ]
+    # memory = ConversationBufferMemory(memory_key="chat_history")
+
+    llm = ChatOpenAI(temperature=0.0, model_name="gpt-4")
+    memory = ConversationSummaryBufferMemory(llm=llm, max_token_limit=MAX_TOKENS, memory_key="chat_history")
+
+    array_of_dicts = []
+    for item in message.chat_history[2:]:
+        array_of_dicts.append({"input": item.content if item.role == "user" else None,
+                               "output": item.content if item.role == "assistant" else None})
+
+    for item in array_of_dicts:
+        user_message = item["input"]
+        ai_message = item["output"]
+        # memory.save_context({'input': item["input"]}, {'output': item["output"]})
+        if user_message:
+            memory.chat_memory.add_user_message(user_message)
+
+        if ai_message:
+            memory.chat_memory.add_ai_message(ai_message)
+
+    agent_chain = initialize_agent(tools, llm, agent=AgentType.CONVERSATIONAL_REACT_DESCRIPTION, verbose=True,
+                                   memory=memory)
+    try:
+        bot_reply = agent_chain.run(input=message.message)
+    except ValueError as e:
+        bot_reply = str(e)
+        print(bot_reply)
+        if not bot_reply.startswith("Could not parse LLM output: `"):
+            raise e
+        bot_reply = bot_reply.removeprefix("Could not parse LLM output: `").removesuffix("`")
+    chat_history = [
+        *[c.dict() for c in message.chat_history],
+        {'role': 'user', 'content': message.message}
+    ]
+
+    return {
+        'message': bot_reply,
+        'chat_history': [*chat_history, {'role': 'assistant', 'content': bot_reply}]
+    }
+
+
 @router.post('/chat', response_model=None, response_description='Chat completion with ChatGPT')
 async def chat(message: Message):
-    llm = ChatOpenAI(temperature=0.0, openai_api_key=message.api_key,model_name="gpt-3.5-turbo-16k")
-    memory = ConversationSummaryBufferMemory(llm=llm, max_token_limit=5000)
+    llm = ChatOpenAI(temperature=0.0, openai_api_key=message.api_key, model_name="gpt-3.5-turbo")
+    memory = ConversationSummaryBufferMemory(llm=llm, max_token_limit=MAX_TOKENS)
 
     if len(message.chat_history) > 1:
         input_memory = ''
@@ -117,9 +137,9 @@ async def chat(message: Message):
 @router.post('/qna', response_model=None, response_description='simple question answer with ChatGPT')
 async def chat(message: QnA):
     _ = load_dotenv(find_dotenv())  # read local .env file
-    llm = ChatOpenAI(temperature=0.0,model_name="gpt-3.5-turbo-16k")
+    llm = ChatOpenAI(temperature=0.0, model_name="gpt-3.5-turbo")
     loader = PyPDFLoader(message.url)
-    documents = loader.load()
+    documents = loader.load_and_split()
     embeddings = OpenAIEmbeddings()
     text_splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=100)
     docs = text_splitter.split_documents(documents)
@@ -145,38 +165,7 @@ async def chat(message: DocMessage):
     # initialize pinecone
 
     if message.delete_index:
-        # if index_name in pinecone.list_indexes():
-        #     pinecone.delete_index(index_name)
-        cred = credentials.Certificate("application/routers/chat_gpt/fd-market-pulse-firebase-adminsdk.json")
-        try:
-            firebase_admin.get_app()
-        except ValueError as e:
-            firebase_admin.initialize_app(cred)
-
-        bucket = storage.bucket("fd-market-pulse.appspot.com")
-
-        blobs = bucket.list_blobs(prefix='doc_chatbot/')
-
-        documents_url_list = []
-        for blob in blobs:
-            if not blob.name.endswith('/'):  # Ignore directories
-                blob.make_public()
-                documents_url_list.append(blob.public_url)
-
-        documents = []
-        for i in documents_url_list:
-            print("document loading start ")
-            loader = PyPDFLoader(i)
-            doc_i = loader.load()
-            print("document loading end ")
-
-            for j in doc_i:
-                if len(j.page_content) < 50:
-                    j.page_content = ""
-                j.metadata['file_name'] = i
-            documents.extend(doc_i)
-            print("document extend end")
-
+        documents = load_firebase_documents("fd-market-pulse.appspot.com", 'doc_chatbot/')
         text_splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=100)
         docs = text_splitter.split_documents(documents)
         # First, check if our index already exists. If it doesn't, we create it
@@ -191,6 +180,19 @@ async def chat(message: DocMessage):
     else:
         docsearch = Pinecone.from_existing_index(index_name, embedding)
 
+    metadata_field_info = [
+        AttributeInfo(
+            name="file_name",
+            description="The document the chunk is from",
+            type="string",
+        ),
+        AttributeInfo(
+            name="page",
+            description="The page from the document",
+            type="integer",
+        ),
+    ]
+
     general_system_template = r"""Use the following pieces of context to answer the question at the end. If you don't 
     know the answer, just say that you don't know, don't try to make up an answer. Keep the answer with as much 
     detail as possible. Always say "thanks for asking!" at the end of the answer. ---- {context} ----"""
@@ -200,15 +202,27 @@ async def chat(message: DocMessage):
         HumanMessagePromptTemplate.from_template(general_user_template)
     ]
     qa_prompt = ChatPromptTemplate.from_messages(messages)
+    document_content_description = "files"
+    llm = ChatOpenAI(model_name="gpt-3.5-turbo-16k", temperature=0)
+    retriever = SelfQueryRetriever.from_llm(
+        llm,
+        docsearch,
+        document_content_description,
+        metadata_field_info,
+        verbose=True
+    )
     qa = ConversationalRetrievalChain.from_llm(
         llm=ChatOpenAI(model_name="gpt-3.5-turbo-16k", temperature=0),
         chain_type="stuff",
-        retriever=docsearch.as_retriever(search_type="similarity", search_kwargs={'k': 50}),
+        retriever=docsearch.as_retriever(search_type="similarity", search_kwargs={'k': 20}),
         combine_docs_chain_kwargs={'prompt': qa_prompt}
-        # condense_question_prompt=prompt
-        # return_source_documents=True,
-        # return_generated_question=True,
     )
+    # qa = ConversationalRetrievalChain.from_llm(
+    #     llm=ChatOpenAI(model_name="gpt-3.5-turbo-16k", temperature=0),
+    #     chain_type="map_reduce",
+    #     retriever=retriever,
+    #     # combine_docs_chain_kwargs={'prompt': qa_prompt}
+    # )
 
     result = qa({"question": message.message, "chat_history": message.doc_history})
     message.doc_history.extend([(message.message, result["answer"])])
@@ -224,3 +238,9 @@ async def chat(message: DocMessage):
         'doc_history': message.doc_history,
         'delete_index': message.delete_index
     }
+
+
+@router.post("/stock_analysis", response_model=None, response_description='Chat completion with docs')
+async def stock_analysis(request: StockAnalysisRequest):
+    stock_data_agent = get_stock_data(request.tickers, request.start, request.end)
+    return {"result": stock_data_agent(request.query), "tickers": request.tickers}
