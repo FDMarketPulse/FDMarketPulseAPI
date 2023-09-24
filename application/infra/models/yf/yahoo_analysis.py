@@ -20,6 +20,7 @@ class Macro(Base):
     low = Column(Float(precision=10))
     open = Column(Float(precision=18))
     volume = Column(BigInteger)
+    daily_return = Column(Float(precision=18))
 
     __table_args__ = (
         UniqueConstraint('date', 'ticker', name='_date_ticker_uc'),
