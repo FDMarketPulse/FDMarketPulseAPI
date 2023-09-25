@@ -1,17 +1,23 @@
+import os
+
+from dotenv import load_dotenv
 from sqlalchemy import create_engine
 from sqlalchemy.orm import DeclarativeBase
 from sqlalchemy.orm import sessionmaker
 
-# Connection details
-db_host = 'localhost'
-db_port = '5432'
-db_name = 'mydb'
-db_user = 'postgres'
-db_password = 'password'
+# Load environment variables from .env file
+load_dotenv()
+
+# Read environment variables
+db_host = os.getenv('DB_HOST')
+db_port = os.getenv('DB_PORT')
+db_name = os.getenv('DB_NAME')
+db_user = os.getenv('DB_USER')
+db_password = os.getenv('DB_PASSWORD')
 
 # Create the connection string
-connection_string = "postgresql://doadmin:AVNS_vhMPBp3xk2iVcK-mogM@db-postgresql-nyc1-95738-do-user-14221760-0.b.db.ondigitalocean.com:25060/defaultdb"
-# connection_string = f'postgresql://{db_user}:{db_password}@{db_host}:{db_port}/{db_name}'
+connection_string = f'postgresql://{db_user}:{db_password}@{db_host}:{db_port}/{db_name}'
+
 # Create the SQLAlchemy engine and session
 engine = create_engine(connection_string)
 Session = sessionmaker(bind=engine)

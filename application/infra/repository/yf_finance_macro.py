@@ -17,6 +17,5 @@ class YfFinMacroRepo:
 
     def get_overall_macro_data(self):
         item = self.db.query(Macro)
-        # self.db.close()
 
         return item

@@ -1,6 +1,3 @@
-from application.infra.models._base import Base
-
-from sqlalchemy import Column, Float, String, BigInteger, Date, UniqueConstraint
 from sqlalchemy import Column, Float, String, BigInteger, Date, UniqueConstraint
 
 from application.infra.models._base import Base

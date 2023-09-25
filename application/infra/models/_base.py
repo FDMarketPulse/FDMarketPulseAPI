@@ -1,18 +1,21 @@
+import os
+
+from dotenv import load_dotenv
 from sqlalchemy import create_engine
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import Session, sessionmaker
 
 __all__ = ["get_db", "Base"]
 # Connection details
-# db_host = 'localhost'
-# db_port = '5432'
-# db_name = 'mydb'
-# db_user = 'postgres'
-# db_password = 'password'
+db_host = os.getenv('DB_HOST')
+db_port = os.getenv('DB_PORT')
+db_name = os.getenv('DB_NAME')
+db_user = os.getenv('DB_USER')
+db_password = os.getenv('DB_PASSWORD')
 
-# connection_string = f'postgresql://{db_user}:{db_password}@{db_host}:{db_port}/{db_name}'
-connection_string = "postgresql://defaultdb_xdbr_user:QsKsnZrlAGWRpVIgBo1l3DTwziiAKpXl@dpg-ck5dum6ru70s73c6f5i0-a" \
-                    ".singapore-postgres.render.com/defaultdb_xdbr"
+load_dotenv()
+
+connection_string = f'postgresql://{db_user}:{db_password}@{db_host}:{db_port}/{db_name}'
 
 engine = create_engine(connection_string)
 Base = declarative_base()
